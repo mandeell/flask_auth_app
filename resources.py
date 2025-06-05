@@ -19,8 +19,10 @@ def get_serializer():
 def validate_email(email):
     try:
         check_email(email)
+        print(f'Email address {email} is valid')
         return True
-    except EmailNotValidError:
+    except EmailNotValidError as e:
+        print(f'Email validation for {email}: {str(e)}')
         return False
 
 # Output fields
@@ -66,7 +68,9 @@ def send_email(to, subject, template):
         html=template
     )
     try:
-        print(f'Sending email to {to}...')
+        print(
+            f'Sending email to {to} using SMTP {Config.MAIL_SERVER}:{Config.MAIL_PORT} '
+            f'with username {Config.MAIL_USERNAME}')
         mail.send(msg)
         print('Email sent successfully')
     except Exception as e:
@@ -75,7 +79,7 @@ def send_email(to, subject, template):
 
 
 class SignupResources(Resource):
-    # @marshal_with(user_fields)
+    @marshal_with(user_fields)
     def post(self):
         try:
             args = signup_parser.parse_args()
@@ -86,6 +90,8 @@ class SignupResources(Resource):
             first_name = args.get('first_name')
             last_name = args.get('last_name')
 
+
+            print(f"Checking email: {email}")
             if not validate_email(email):
                 return {'message': 'Invalid email format'}, 400
             if User.query.filter_by(username=username).first() or User.query.filter_by(email=email).first():
@@ -99,12 +105,12 @@ class SignupResources(Resource):
                 last_name=last_name,
                 is_active=False,
             )
-            db.session.add(new_user)
-            db.session.commit()
             serializer = get_serializer()
             token = serializer.dumps(new_user.email)
             confirmation_url = f'https://localhost:5000/confirm/{token}'
             send_email(new_user.email, 'Confirm Your Email', f'Please confirm your email: {confirmation_url}')
+            db.session.add(new_user)
+            db.session.commit()
             return new_user, 201
         except Exception as e:
             return {'message': 'Server error', 'error': str(e)}, 500
@@ -120,8 +126,10 @@ class LoginResources(Resource):
         mfa_code = args.get('mfa_code')
 
         user = User.query.filter_by(username=username).first()
-        if not user or not user.password or not bcrypt.check_password_hash(user.password, password):
+        if not user or not user.password or not bcrypt.check_password_hash(user.password, password) or not user.is_active:
             return {'message': 'Invalid Username or Password'}, 401
+        if not user.is_active:
+            return {'message': 'Account not activated. Please confirm your email.'}, 403
 
         if user.mfa_enabled:
             if not mfa_code or not pyotp.TOTP(user.mfa_secret).verify(mfa_code):
@@ -141,8 +149,11 @@ class LoginResources(Resource):
 class MFASetupResources(Resource):
     @jwt_required()
     def post(self):
+        print("Reached /mfa POST endpoint")
         user_id = get_jwt_identity()
-        user = User.query.get_or_404(user_id)
+        print(f"JWT Identity: {user_id}")
+        user = User.query.filter_by(token_id=user_id).first()
+        print(f"Found user: {user.username}")
         if not user.mfa_secret:
             user.mfa_secret = pyotp.random_base32()
             db.session.commit()
@@ -153,7 +164,7 @@ class MFASetupResources(Resource):
     def put(self):
         args = mfa_parser.parse_args()
         user_id = get_jwt_identity()
-        user = User.query.get_or_404(user_id)
+        user = User.query.filter_by(token_id=user_id).first()
 
         if pyotp.TOTP(user.mfa_secret).verify(args['mfa_code']):
             user.mfa_enabled = True
@@ -204,41 +215,86 @@ class GoogleLoginResources(Resource):
 
 class GoogleCallbackResources(Resource):
     def get(self):
-        from app import oauth
-        google = oauth.create_client('google')
-        token = google.authorize_access_token()
-        user_info = google.get('https://www.googleapis.com/oauth2/v3/userinfo').json()
-        base_username = user_info['email'].split('@')[0]
-        username = base_username
-        counter = 1
-        while User.query.filter_by(username=username).first():
-            username = f'{base_username}{counter}'
-            counter += 1
+        try:
+            from app import oauth
+            google = oauth.create_client('google')
+            token = google.authorize_access_token()
+            user_info = google.get('https://www.googleapis.com/oauth2/v3/userinfo').json()
 
-        user = User.query.filter_by(oauth_provider='google', oauth_id=user_info['sub']).first()
-        if not user:
+            # First, check if user exists by OAuth credentials
+            user = User.query.filter_by(oauth_provider='google', oauth_id=user_info['sub']).first()
+
+            if user:
+                # User exists with OAuth, proceed with login
+                access_token = create_access_token(identity=user.token_id,
+                                                   additional_claims={'username': user.username})
+                refresh_token = create_refresh_token(identity=user.token_id,
+                                                     additional_claims={'username': user.username})
+                return {
+                    'access_token': access_token,
+                    'refresh_token': refresh_token,
+                    'message': 'Google Login Successful'
+                }, 200
+
+            # Check if user exists with same email (from regular signup)
+            existing_user = User.query.filter_by(email=user_info['email']).first()
+
+            if existing_user:
+                # Update existing user to link with Google OAuth
+                existing_user.oauth_provider = 'google'
+                existing_user.oauth_id = user_info['sub']
+                # Optionally update name fields if they're empty
+                if not existing_user.first_name:
+                    existing_user.first_name = user_info.get('given_name')
+                if not existing_user.last_name:
+                    existing_user.last_name = user_info.get('family_name')
+
+                db.session.commit()
+
+                access_token = create_access_token(identity=existing_user.token_id,
+                                                    additional_claims={'username': existing_user.username})
+                refresh_token = create_refresh_token(identity=existing_user.token_id,
+                                                        additional_claims={'username': existing_user.username})
+                return {
+                    'access_token': access_token,
+                    'refresh_token': refresh_token,
+                    'message': 'Google account linked successfully'
+                }, 200
+
+            # Create new user if no existing user found
+            base_username = user_info['email'].split('@')[0]
+            username = base_username
+            counter = 1
+            while User.query.filter_by(username=username).first():
+                username = f'{base_username}{counter}'
+                counter += 1
+
             user = User(
                 username=username,
                 email=user_info['email'],
                 first_name=user_info.get('given_name'),
                 last_name=user_info.get('family_name'),
                 oauth_provider='google',
-                oauth_id=user_info['sub']
+                oauth_id=user_info['sub'],
+                is_active=True  # OAuth users are automatically active
             )
             db.session.add(user)
             db.session.commit()
 
-        user_id = str(user.id)
-        if not user_id or not user_id.strip():
-            return {'message': 'Invalid User ID'}, 400
+            access_token = create_access_token(identity=user.token_id,
+                                                additional_claims={'username': user.username})
+            refresh_token = create_refresh_token(identity=user.token_id,
+                                                additional_claims={'username': user.username})
+            return {
+                'access_token': access_token,
+                'refresh_token': refresh_token,
+                'message': 'Google Login Successful'
+            }, 200
 
-        access_token = create_access_token(identity=user.token_id, additional_claims={'username': user.username})
-        refresh_token = create_refresh_token(identity=user.token_id, additional_claims={'username': user.username})
-        return {
-            'access_token': access_token,
-            'refresh_token': refresh_token,
-            'message': 'Google Login Successful'
-        }, 200
+        except Exception as e:
+            db.session.rollback()
+            print(f'Error in Google OAuth Callback: {str(e)}')
+            return {'message': 'Server error', 'error': str(e)}, 500
 
 class ConfirmEmailResource(Resource):
     def get(self, token):
@@ -262,7 +318,7 @@ class ForgotPasswordResource(Resource):
         if user:
             serializer = get_serializer()
             token = serializer.dumps(user.email)
-            reset_url = f'https//localhost:5000/rest-password/{token}'
+            reset_url = f'https://localhost:5000/reset-password/{token}'
             send_email(user.email, 'Reset Your password', f'Reset link: {reset_url}')
             return {'message': 'Password reset email sent'}, 200
         return {'message': 'User not found'}, 404
@@ -293,7 +349,7 @@ class ResendConfirmationResource(Resource):
         if user and not user.is_active:
             serializer = get_serializer()
             token = serializer.dumps(user.email)
-            confirmation_url = f'https//localhost:5000/confirm/{token}'
+            confirmation_url = f'https://localhost:5000/confirm/{token}'
             send_email(user.email, 'Confirm Your Email', f'Please confirm your email: {confirmation_url}')
             return {'message': 'Confirmation email sent'}, 200
         return {'message': 'User not found or already active'}, 404

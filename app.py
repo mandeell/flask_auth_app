@@ -18,6 +18,11 @@ load_dotenv()
 app = Flask(__name__)
 app.config.from_object(Config)
 
+# Enable sessions
+app.config['SESSION_COOKIE_SECURE'] = True  # Use HTTPS
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+
 # Initialize extensions
 db.init_app(app)
 api = Api(app)

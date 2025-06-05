@@ -20,8 +20,13 @@ class Config:
     FERNET_KEY = os.environ.get('FERNET_KEY')
 
     MAIL_SERVER = 'smtp.gmail.com'
-    MAIL_PORT = 587
-    MAIL_USE_TLS = True
+    # MAIL_PORT = 587
+    # MAIL_USE_TLS = True
     MAIL_USERNAME = os.environ.get('MAIL_USERNAME')
     MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD')
     MAIL_DEFAULT_SENDER = os.environ.get('MAIL_USERNAME')
+    MAIL_TIMEOUT = 20  # Increase timeout to 20 seconds
+    MAIL_DEBUG = True  # Enable debugging
+    MAIL_PORT = 465
+    MAIL_USE_SSL = True
+    MAIL_USE_TLS = False

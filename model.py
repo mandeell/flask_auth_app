@@ -37,3 +37,4 @@ class TokenBlacklist(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow, nullable=False)
 
     __table_args__ = (Index('idx_jti', 'jti'),)
+
