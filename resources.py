@@ -1,18 +1,27 @@
+import uuid
 from flask_mail import Message
 from flask_restful import Resource, reqparse,fields,marshal_with
 from flask_jwt_extended import (create_access_token, create_refresh_token,jwt_required, get_jwt_identity,get_jwt)
 from flask_bcrypt import Bcrypt
 from itsdangerous import URLSafeTimedSerializer
 from model import User, TokenBlacklist, db
-import pyotp, re
+import pyotp
 from flask import request
 from config import Config
+from email_validator import validate_email as check_email, EmailNotValidError
 
 bcrypt = Bcrypt()
 
 # Initialize URLSafeTimedSerializer for token generation
 def get_serializer():
     return URLSafeTimedSerializer(Config.SECRET_KEY)  # Use a secure key, ideally from config
+
+def validate_email(email):
+    try:
+        check_email(email)
+        return True
+    except EmailNotValidError:
+        return False
 
 # Output fields
 user_fields = {
@@ -57,82 +66,72 @@ def send_email(to, subject, template):
         html=template
     )
     try:
+        print(f'Sending email to {to}...')
         mail.send(msg)
+        print('Email sent successfully')
     except Exception as e:
+        print(f'Failed to send email: {str(e)}')
         raise Exception(f"Failed to send email: {str(e)}")
 
-def validate_email(email):
-    """Validate email format"""
-    pattern = r'^[\w\.-]+@[\w\.-]+\.\w+$'
-    return re.match(pattern, email) is not None
 
 class SignupResources(Resource):
-    @marshal_with(user_fields)
+    # @marshal_with(user_fields)
     def post(self):
-        args = signup_parser.parse_args()
-        username = args['username']
-        email = args['email']
-        password = args['password']
-        first_name = args.get('first_name')
-        last_name = args.get('last_name')
+        try:
+            args = signup_parser.parse_args()
+            print('Parsed Args', args)
+            username = args['username']
+            email = args['email']
+            password = args['password']
+            first_name = args.get('first_name')
+            last_name = args.get('last_name')
 
-        if not validate_email(email):
-            return {'message': 'Invalid email format'}, 400
-        if User.query.filter_by(username=username).first() or User.query.filter_by(email=email).first():
-            return {'message': 'Username already exists'}, 400
-        hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
-        new_user = User(
-            username=username,
-            email=email,
-            password=hashed_password,
-            first_name=first_name,
-            last_name=last_name,
-            is_active=False,
-        )
-        db.session.add(new_user)
-        db.session.commit()
-        return new_user, 201
+            if not validate_email(email):
+                return {'message': 'Invalid email format'}, 400
+            if User.query.filter_by(username=username).first() or User.query.filter_by(email=email).first():
+                return {'message': 'Username already exists'}, 400
+            hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
+            new_user = User(
+                username=username,
+                email=email,
+                password=hashed_password,
+                first_name=first_name,
+                last_name=last_name,
+                is_active=False,
+            )
+            db.session.add(new_user)
+            db.session.commit()
+            serializer = get_serializer()
+            token = serializer.dumps(new_user.email)
+            confirmation_url = f'https://localhost:5000/confirm/{token}'
+            send_email(new_user.email, 'Confirm Your Email', f'Please confirm your email: {confirmation_url}')
+            return new_user, 201
+        except Exception as e:
+            return {'message': 'Server error', 'error': str(e)}, 500
 
 class LoginResources(Resource):
     def post(self):
-        print("Reached LoginResource POST method")
-        print("Request Method:", request.method)
-        print("Request URL:", request.url)
-        print("Request Headers:", request.headers)
-        print("Request Data (Raw):", request.get_data(as_text=True))
-        print("Request JSON:", request.get_json())
         try:
             args = login_parser.parse_args()
-            print("Parsed Args:", args)
         except Exception as e:
-            print("Parsing Error:", str(e))
             return {'error': 'Failed to parse request', 'details': str(e)}, 400
         username = args['username']
         password = args['password']
         mfa_code = args.get('mfa_code')
-        print("MFA Code Provided:", mfa_code)
 
         user = User.query.filter_by(username=username).first()
-        print("User Found:", user.username if user else None)
-        print("MFA Enabled:", user.mfa_enabled if user else None)
-        print("MFA Secret:", user.mfa_secret if user else None)
-
         if not user or not user.password or not bcrypt.check_password_hash(user.password, password):
             return {'message': 'Invalid Username or Password'}, 401
 
         if user.mfa_enabled:
-            print("MFA Code Provided (Again):", mfa_code)
             if not mfa_code or not pyotp.TOTP(user.mfa_secret).verify(mfa_code):
-                print("MFA Verification Failed")
                 return {'message': 'Invalid MFA code'}, 401
-        user_id = str(user.id) if user and user.id else None
-        print("User ID for Token Creation:", user_id)
-        if not user_id or not user_id.strip():
-            return {'message': 'Invalid User ID'}, 400
-        access_token = create_access_token(identity=str(user_id), additional_claims={'username': user.username})
-        print("Access Token Identity:", user_id)
-        refresh_token = create_refresh_token(identity=str(user_id))
-        print("Refresh Token Identity:", user_id)
+
+        # user_id = str(user.id) if user and user.id else None
+        # if not user_id or not user_id.strip():
+        #     return {'message': 'Invalid User ID'}, 400
+        access_token = create_access_token(identity=user.token_id, additional_claims={'username': user.username})
+        refresh_token = create_refresh_token(identity=user.token_id, additional_claims={'username': user.username})
         return {
             'access_token': access_token,
             'refresh_token': refresh_token,
@@ -142,20 +141,11 @@ class LoginResources(Resource):
 class MFASetupResources(Resource):
     @jwt_required()
     def post(self):
-        print('Reached MFASetupResources POST method')
-        print("Request Headers:", request.headers)
-        print("Request JSON:", request.get_json(silent=True))
-        print("Request Form:", request.form)
         user_id = get_jwt_identity()
-        print("User ID from JWT:", user_id)
         user = User.query.get_or_404(user_id)
-        print("User Email:", user.email)
-        print("User MFA Secret:", user.mfa_secret)
-
         if not user.mfa_secret:
             user.mfa_secret = pyotp.random_base32()
             db.session.commit()
-            print("New MFA Secret Generated:", user.mfa_secret)
         return {'mfa_secret': user.mfa_secret, 'provisioning_uri':
                 pyotp.totp.TOTP(user.mfa_secret).provisioning_uri(user.email, issuer_name='MyApp')}, 200
 
@@ -175,7 +165,6 @@ class TokenRefreshResources(Resource):
     @jwt_required(refresh=True)
     def post(self):
         current_user = get_jwt_identity()
-        print("Identity from Refresh Token:", current_user)
         if not isinstance(current_user, str):
             return {'message': 'Invalid identity type'}, 422
         new_access_token = create_access_token(identity=str(current_user))
@@ -193,15 +182,13 @@ class ProfileResources(Resource):
     @jwt_required()
     @marshal_with(user_fields)
     def get(self):
-        print("Request Headers", request.headers)
         user_id = get_jwt_identity()
-        print("Identity from Profile Request:", user_id)
 
         if not isinstance(user_id, str):
             return {'message': 'Invalid user ID type'}, 422
 
         try:
-            user = User.query.get_or_404(int(user_id))
+            user = User.query.filter_by(token_id=user_id).first_or_404()
             return user, 200
         except ValueError:
             return {'message': 'Invalid user ID format'}, 422
@@ -210,28 +197,28 @@ class ProfileResources(Resource):
 
 class GoogleLoginResources(Resource):
     def get(self):
-        print('Reached GoogleLoginResources GET method')
         from app import oauth
         google = oauth.create_client('google')
         redirect_uri = 'https://localhost:5000/auth/google/callback'
-        print(f"Redirect URI: {redirect_uri}")
         return google.authorize_redirect(redirect_uri)
 
 class GoogleCallbackResources(Resource):
     def get(self):
-        print('Reached GoogleCallbackResources GET method')
         from app import oauth
         google = oauth.create_client('google')
-        print("Request Args:", request.args)
         token = google.authorize_access_token()
-        print("Access Token:", token)
         user_info = google.get('https://www.googleapis.com/oauth2/v3/userinfo').json()
-        print("User Info:", user_info)
+        base_username = user_info['email'].split('@')[0]
+        username = base_username
+        counter = 1
+        while User.query.filter_by(username=username).first():
+            username = f'{base_username}{counter}'
+            counter += 1
 
         user = User.query.filter_by(oauth_provider='google', oauth_id=user_info['sub']).first()
         if not user:
             user = User(
-                username=user_info['email'].split('@')[0],
+                username=username,
                 email=user_info['email'],
                 first_name=user_info.get('given_name'),
                 last_name=user_info.get('family_name'),
@@ -242,16 +229,72 @@ class GoogleCallbackResources(Resource):
             db.session.commit()
 
         user_id = str(user.id)
-        print("User ID for Token Creation:", user_id)
         if not user_id or not user_id.strip():
             return {'message': 'Invalid User ID'}, 400
 
-        access_token = create_access_token(identity=user_id, additional_claims={'username': user.username})
-        print("Access Token Identity:", user_id)
-        refresh_token = create_refresh_token(identity=user_id)
-        print("Refresh Token Identity:", user_id)
+        access_token = create_access_token(identity=user.token_id, additional_claims={'username': user.username})
+        refresh_token = create_refresh_token(identity=user.token_id, additional_claims={'username': user.username})
         return {
             'access_token': access_token,
             'refresh_token': refresh_token,
             'message': 'Google Login Successful'
         }, 200
+
+class ConfirmEmailResource(Resource):
+    def get(self, token):
+        serializer = get_serializer()
+        try:
+            email = serializer.loads(token, max_age=3600)
+            user = User.query.filter_by(email=email).first()
+            if user:
+                user.is_active = True
+                db.session.commit()
+                return {'message': 'Email Confirmed'}, 200
+            return {'message': 'User not found'}, 400
+        except Exception:
+            return {'message': 'Invalid or Expired token'}, 400
+
+class ForgotPasswordResource(Resource):
+    def post(self):
+        args = forgot_password_parser.parse_args()
+        email =     args['email']
+        user = User.query.filter_by(email=email).first()
+        if user:
+            serializer = get_serializer()
+            token = serializer.dumps(user.email)
+            reset_url = f'https//localhost:5000/rest-password/{token}'
+            send_email(user.email, 'Reset Your password', f'Reset link: {reset_url}')
+            return {'message': 'Password reset email sent'}, 200
+        return {'message': 'User not found'}, 404
+
+class ResetPasswordResource(Resource):
+    def post(self, token):
+        serializer = get_serializer()
+        try:
+            email = serializer.loads(token, max_age=3600)
+            user = User.query.filter_by(email=email).first()
+            if user:
+                args = reset_password_parser.parse_args()
+                user.password = bcrypt.generate_password_hash(args['password']).decode('utf-8')
+                user.token_id = str(uuid.uuid4())
+                db.session.commit()
+                return {'message': 'Password reset successful'}, 200
+            return {'message': 'User not found'}, 404
+        except Exception:
+            return {'message': 'Invalid or Expired token'}, 400
+
+class ResendConfirmationResource(Resource):
+    def post(self):
+        parser = reqparse.RequestParser()
+        parser.add_argument('email', type=str, required=True, help='Email address is required')
+        args = parser.parse_args()
+        email = args['email']
+        user = User.query.filter_by(email=email).first()
+        if user and not user.is_active:
+            serializer = get_serializer()
+            token = serializer.dumps(user.email)
+            confirmation_url = f'https//localhost:5000/confirm/{token}'
+            send_email(user.email, 'Confirm Your Email', f'Please confirm your email: {confirmation_url}')
+            return {'message': 'Confirmation email sent'}, 200
+        return {'message': 'User not found or already active'}, 404
+
