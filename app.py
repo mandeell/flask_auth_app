@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from flask import Flask
 from flask_mail import Mail
 from flask_restful import Api
@@ -19,7 +20,7 @@ app = Flask(__name__)
 app.config.from_object(Config)
 
 # Enable sessions
-app.config['SESSION_COOKIE_SECURE'] = True  # Use HTTPS
+app.config['SESSION_COOKIE_SECURE'] = True
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
@@ -36,12 +37,12 @@ oauth.register(
     name='google',
     client_id=app.config['GOOGLE_CLIENT_ID'],
     client_secret=app.config['GOOGLE_CLIENT_SECRET'],
-    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
+    server_metadata_url=app.config['SERVER_METADATA_URL'],
     client_kwargs={'scope': 'openid email profile'},
 )
 
 def cleanup_blacklist():
-    expiration = datetime.utcnow() - timedelta(days=30)
+    expiration = datetime.now(ZoneInfo('Africa/Lagos')) - timedelta(days=30)
     TokenBlacklist.query.filter(TokenBlacklist.created_at < expiration).delete()
     db.session.commit()
 
@@ -89,4 +90,4 @@ api.add_resource(ResendConfirmationResource, '/resend-confirmation')
 
 
 if __name__ == '__main__':
-    app.run(debug=True, ssl_context='adhoc')
+    app.run()

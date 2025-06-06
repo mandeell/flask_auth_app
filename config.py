@@ -16,8 +16,10 @@ class Config:
     JWT_IDENTITY_CLAIM = 'sub'
     GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID')
     GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET')
-    GOOGLE_DISCOVERY_URL = 'https://accounts.google.com/.well-known/openid-configuration'
+    GOOGLE_DISCOVERY_URL = os.environ.get('GOOGLE_DISCOVERY_URL')
     FERNET_KEY = os.environ.get('FERNET_KEY')
+    BASE_URL = os.environ.get('BASE_URL')
+    SERVER_METADATA_URL=os.environ.get('SERVER_METADATA_URL')
 
     MAIL_SERVER = 'smtp.gmail.com'
     # MAIL_PORT = 587

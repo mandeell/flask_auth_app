@@ -107,8 +107,9 @@ class SignupResources(Resource):
             )
             serializer = get_serializer()
             token = serializer.dumps(new_user.email)
-            confirmation_url = f'https://localhost:5000/confirm/{token}'
-            send_email(new_user.email, 'Confirm Your Email', f'Please confirm your email: {confirmation_url}')
+            confirmation_url = f'{Config.BASE_URL}/confirm/{token}'
+            send_email(new_user.email, 'Confirm Your Email', f'Please confirm your email: '
+                                                             f'{confirmation_url}')
             db.session.add(new_user)
             db.session.commit()
             return new_user, 201
@@ -135,9 +136,6 @@ class LoginResources(Resource):
             if not mfa_code or not pyotp.TOTP(user.mfa_secret).verify(mfa_code):
                 return {'message': 'Invalid MFA code'}, 401
 
-        # user_id = str(user.id) if user and user.id else None
-        # if not user_id or not user_id.strip():
-        #     return {'message': 'Invalid User ID'}, 400
         access_token = create_access_token(identity=user.token_id, additional_claims={'username': user.username})
         refresh_token = create_refresh_token(identity=user.token_id, additional_claims={'username': user.username})
         return {
@@ -210,8 +208,8 @@ class GoogleLoginResources(Resource):
     def get(self):
         from app import oauth
         google = oauth.create_client('google')
-        redirect_uri = 'https://localhost:5000/auth/google/callback'
-        return google.authorize_redirect(redirect_uri)
+        redirect_url = f'{Config.BASE_URL}/auth/google/callback'
+        return google.authorize_redirect(redirect_url)
 
 class GoogleCallbackResources(Resource):
     def get(self):
@@ -318,7 +316,7 @@ class ForgotPasswordResource(Resource):
         if user:
             serializer = get_serializer()
             token = serializer.dumps(user.email)
-            reset_url = f'https://localhost:5000/reset-password/{token}'
+            reset_url = f'{Config.BASE_URL}/reset-password/{token}'
             send_email(user.email, 'Reset Your password', f'Reset link: {reset_url}')
             return {'message': 'Password reset email sent'}, 200
         return {'message': 'User not found'}, 404
@@ -349,7 +347,7 @@ class ResendConfirmationResource(Resource):
         if user and not user.is_active:
             serializer = get_serializer()
             token = serializer.dumps(user.email)
-            confirmation_url = f'https://localhost:5000/confirm/{token}'
+            confirmation_url = f'{Config.BASE_URL}/confirm/{token}'
             send_email(user.email, 'Confirm Your Email', f'Please confirm your email: {confirmation_url}')
             return {'message': 'Confirmation email sent'}, 200
         return {'message': 'User not found or already active'}, 404

@@ -1,5 +1,6 @@
 from flask_sqlalchemy import SQLAlchemy
-import datetime
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import uuid
 from cryptography.fernet import Fernet
 from config import Config
@@ -34,7 +35,7 @@ class User(db.Model):
 class TokenBlacklist(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     jti = db.Column(db.String(120), nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.now(ZoneInfo('Africa/Lagos')), nullable=False)
 
     __table_args__ = (Index('idx_jti', 'jti'),)
 
