@@ -1,12 +1,14 @@
 import os
+from dotenv import load_dotenv
 from datetime import timedelta
 
+load_dotenv()
 class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY')
     SQLALCHEMY_DATABASE_URI = 'sqlite:///user.db'
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY')
-    JWT_ACCESS_TOKEN_EXPIRES = timedelta(minutes=2400)
+    JWT_ACCESS_TOKEN_EXPIRES = timedelta(minutes=300)
     JWT_REFRESH_TOKEN_EXPIRES = timedelta(days=30)
     JWT_BLACKLIST_ENABLED = True
     JWT_BLACKLIST_TOKEN_CHECKS = ['access', 'refresh']

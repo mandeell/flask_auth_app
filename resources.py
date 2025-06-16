@@ -79,7 +79,6 @@ def send_email(to, subject, template):
 
 
 class SignupResources(Resource):
-    @marshal_with(user_fields)
     def post(self):
         try:
             args = signup_parser.parse_args()
@@ -95,8 +94,11 @@ class SignupResources(Resource):
             if not validate_email(email):
                 return {'message': 'Invalid email format'}, 400
             if User.query.filter_by(username=username).first() or User.query.filter_by(email=email).first():
+                print("User already exists")
                 return {'message': 'Username already exists'}, 400
+            print("Creating hashed password")
             hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
+            print("Creating new user object")
             new_user = User(
                 username=username,
                 email=email,
@@ -105,15 +107,38 @@ class SignupResources(Resource):
                 last_name=last_name,
                 is_active=False,
             )
+            print("Generating confirmation token")
             serializer = get_serializer()
             token = serializer.dumps(new_user.email)
             confirmation_url = f'{Config.BASE_URL}/confirm/{token}'
-            send_email(new_user.email, 'Confirm Your Email', f'Please confirm your email: '
-                                                             f'{confirmation_url}')
+            print(f"Sending confirmation email to: {email}")
+            try:
+                send_email(new_user.email, 'Confirm Your Email', f'Please confirm your email: '
+                                                                 f'{confirmation_url}')
+                print("Email sent successfully")
+            except Exception as e:
+                print(f"Email sending failed: {str(e)}")
+
+            new_user_dict = {
+                'id': new_user.id,
+                'username': new_user.username,
+                'email': new_user.email,
+                'first_name': new_user.first_name,
+                'last_name': new_user.last_name,
+                'is_active': new_user.is_active
+            }
+            print("Adding user to database")
             db.session.add(new_user)
+            print("Committing to database")
             db.session.commit()
-            return new_user, 201
+            print("User created successfully")
+            return new_user_dict, 200
         except Exception as e:
+            print(f"Exception caught: {str(e)}")
+            print(f"Exception type: {type(e)}")
+            import traceback
+            print(f"Full traceback: {traceback.format_exc()}")
+            db.session.rollback()  # Important: rollback on error
             return {'message': 'Server error', 'error': str(e)}, 500
 
 class LoginResources(Resource):
